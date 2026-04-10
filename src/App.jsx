@@ -111,6 +111,27 @@ const PERMISOS_DEFAULT = { ver_pedidos:true, crear_pedidos:false, ver_catalogo:t
 const fmt = n => n == null ? "-" : new Intl.NumberFormat("es-ES",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(n);
 const diasDesde = f => Math.floor((Date.now() - new Date(f)) / 86400000);
 
+// ── COMPRESIÓN DE IMÁGENES ────────────────────────────────────────────────────
+function comprimirImagen(file, maxWidth=1200, quality=0.75) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let w = img.width, h = img.height;
+        if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function Badge({ txt, color, bg }) {
   return <span style={{fontSize:11,fontWeight:700,color,background:bg,padding:"3px 10px",borderRadius:20,whiteSpace:"nowrap"}}>{txt}</span>;
 }
@@ -1393,10 +1414,13 @@ export default function App() {
       setForm({id:"",prov_id:"",obra_id:"",fecha:new Date().toISOString().split("T")[0],items:[]});
     };
 
+    const [obraFil, setObraFil] = useState("todas");
+
     const filtrados = pedidos.filter(p => {
       const mp = provFil==="todos" || p.prov_id===provFil;
+      const mo = obraFil==="todas" || p.obra_id===obraFil;
       const mb = !busq || p.id.toLowerCase().includes(busq.toLowerCase());
-      return mp && mb;
+      return mp && mo && mb;
     });
 
     return (
@@ -1407,6 +1431,10 @@ export default function App() {
             <select style={{...S.inp,flex:1}} value={provFil} onChange={e=>setProvFil(e.target.value)}>
               <option value="todos">Todos los proveedores</option>
               {provsDB.map(p=><option key={p.id} value={p.id}>{p.nombre.split(",")[0]}</option>)}
+            </select>
+            <select style={{...S.inp,flex:1}} value={obraFil} onChange={e=>setObraFil(e.target.value)}>
+              <option value="todas">Todas las obras</option>
+              {obrasDB.map(o=><option key={o.id} value={o.numero}>{o.numero}</option>)}
             </select>
             {perm("crear_pedidos") && <button style={{...S.btn("primary"),flex:isMobile?1:undefined,justifyContent:"center"}} onClick={()=>setShowForm(true)}>+ Nuevo</button>}
           </div>
@@ -1698,11 +1726,10 @@ export default function App() {
       recargar();
     }, []);
 
-    const handleFoto = (e) => {
+    const handleFoto = async (e) => {
       const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => { setFotoPreview(ev.target.result); setEditForm(f=>({...f, foto_url:ev.target.result})); };
-      reader.readAsDataURL(file);
+      const compressed = await comprimirImagen(file);
+      setFotoPreview(compressed); setEditForm(f=>({...f, foto_url:compressed}));
     };
 
     const abrirModal = (e) => {
@@ -1738,12 +1765,18 @@ export default function App() {
     };
 
     const pedidosEnObra = pedidos.filter(p=>p.estado==="en_obra");
+    const [obraFil, setObraFil] = useState("todas");
 
     const getObra = (pedidoId) => {
       const p = pedidos.find(x=>x.id===pedidoId);
       if (!p) return "-";
       return obrasDB.find(o=>o.numero===p.obra_id)?.numero || p.obra_id || "-";
     };
+
+    const entradasFiltradas = entradas.filter(e => {
+      if (obraFil === "todas") return true;
+      return getObra(e.pedido_id) === obraFil;
+    });
 
     return (
       <div>
@@ -1754,10 +1787,18 @@ export default function App() {
                 📥 Registrar entrada en obra
               </button>
             )}
-            <p style={{color:"#6B7280",fontSize:13,margin:0,textAlign:"center"}}>{entradas.length} entrada(s) registrada(s)</p>
+            <select style={{...S.inp,width:"100%",marginBottom:8}} value={obraFil} onChange={e=>setObraFil(e.target.value)}>
+              <option value="todas">Todas las obras</option>
+              {obrasDB.map(o=><option key={o.id} value={o.numero}>{o.numero} - {o.nombre}</option>)}
+            </select>
+            <p style={{color:"#6B7280",fontSize:13,margin:0,textAlign:"center"}}>{entradasFiltradas.length} entrada(s)</p>
           </div>
         ) : (
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
+            <select style={{...S.inp,width:"auto"}} value={obraFil} onChange={e=>setObraFil(e.target.value)}>
+              <option value="todas">Todas las obras</option>
+              {obrasDB.map(o=><option key={o.id} value={o.numero}>{o.numero} - {o.nombre}</option>)}
+            </select>
             <p style={{color:"#6B7280",fontSize:13,margin:0}}>Registra la llegada de maquinaria a obra.</p>
             {perm("entradas_devoluciones") && (
               <button style={S.btn("primary")} onClick={()=>abrirModal(null)}>+ Registrar entrada</button>
@@ -1769,7 +1810,7 @@ export default function App() {
           <div style={{...S.card,textAlign:"center",padding:40,color:"#6B7280"}}>No hay entradas registradas.</div>
         ) : isMobile ? (
           <div>
-            {entradas.map(e=>{
+            {entradasFiltradas.map(e=>{
               const prov = provsDB.find(p=>p.id===e.proveedor_id);
               const numObra = getObra(e.pedido_id);
               const ped = pedidos.find(p=>p.id===e.pedido_id);
@@ -1802,7 +1843,7 @@ export default function App() {
               <table style={S.table}>
                 <thead><tr>{["Pedido","Num. Obra","Maquinas","Fecha entrada","Proveedor","Observaciones","Confirmado","Foto",...(esAdmin?["Acciones"]:[])].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {entradas.map(e=>{
+                  {entradasFiltradas.map(e=>{
                     const prov = provsDB.find(p=>p.id===e.proveedor_id);
                     const numObra = getObra(e.pedido_id);
                     return (
@@ -1930,11 +1971,10 @@ export default function App() {
       supabase.from("devoluciones").select("*").order("created_at", {ascending:false}).then(({data}) => setDevoluciones(data||[]));
     }, []);
 
-    const handleFoto = (e) => {
+    const handleFoto = async (e) => {
       const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => { setFotoPreview(ev.target.result); setForm(f=>({...f,foto_url:ev.target.result})); };
-      reader.readAsDataURL(file);
+      const compressed = await comprimirImagen(file);
+      setFotoPreview(compressed); setForm(f=>({...f,foto_url:compressed}));
     };
 
     const guardar = async () => {
@@ -1983,6 +2023,13 @@ export default function App() {
       setForm(f=>({...f, pedido_id:pedidoId, proveedor_id:prov?.id||"", obra_id:obra?.id||"", maquina_cod:p.items?.[0]?.mid||""}));
     };
 
+    const [obraFil, setObraFil] = useState("todas");
+    const devolucionesFiltradas = devoluciones.filter(d => {
+      if (obraFil === "todas") return true;
+      const obra = obrasDB.find(o=>o.id===d.obra_id);
+      return obra?.numero === obraFil;
+    });
+
     return (
       <div>
         {isMobile ? (
@@ -1992,20 +2039,28 @@ export default function App() {
                 ↩️ Registrar devolucion
               </button>
             )}
-            <p style={{color:"#6B7280",fontSize:13,margin:0,textAlign:"center"}}>{devoluciones.length} devolucion(es) registrada(s)</p>
+            <select style={{...S.inp,width:"100%",marginBottom:8}} value={obraFil} onChange={e=>setObraFil(e.target.value)}>
+              <option value="todas">Todas las obras</option>
+              {obrasDB.map(o=><option key={o.id} value={o.numero}>{o.numero} - {o.nombre}</option>)}
+            </select>
+            <p style={{color:"#6B7280",fontSize:13,margin:0,textAlign:"center"}}>{devolucionesFiltradas.length} devolucion(es)</p>
           </div>
         ) : (
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
+            <select style={{...S.inp,width:"auto"}} value={obraFil} onChange={e=>setObraFil(e.target.value)}>
+              <option value="todas">Todas las obras</option>
+              {obrasDB.map(o=><option key={o.id} value={o.numero}>{o.numero} - {o.nombre}</option>)}
+            </select>
             <p style={{color:"#6B7280",fontSize:13,margin:0}}>Registra la devolucion de maquinaria al proveedor.</p>
             {perm("entradas_devoluciones") && <button style={S.btn("primary")} onClick={()=>setModal("nuevo")}>+ Registrar devolucion</button>}
           </div>
         )}
 
-        {devoluciones.length === 0 ? (
+        {devolucionesFiltradas.length === 0 ? (
           <div style={{...S.card,textAlign:"center",padding:40,color:"#6B7280"}}>No hay devoluciones registradas.</div>
         ) : isMobile ? (
           <div>
-            {devoluciones.map(d=>{
+            {devolucionesFiltradas.map(d=>{
               const prov = provsDB.find(p=>p.id===d.proveedor_id);
               const obra = obrasDB.find(o=>o.id===d.obra_id);
               return (
@@ -2033,7 +2088,7 @@ export default function App() {
               <table style={S.table}>
                 <thead><tr>{["Albaran","Proveedor","Obra","Maquina","Cantidad","Fecha dev.","Confirmado","Foto",...(esAdmin?["Acc."]:[])].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {devoluciones.map(d=>{
+                  {devolucionesFiltradas.map(d=>{
                     const prov = provsDB.find(p=>p.id===d.proveedor_id);
                     const obra = obrasDB.find(o=>o.id===d.obra_id);
                     return (
@@ -2147,11 +2202,10 @@ export default function App() {
       supabase.from("incidencias").select("*").order("created_at", {ascending:false}).then(({data}) => setIncidencias(data||[]));
     }, []);
 
-    const handleFoto = (e) => {
+    const handleFoto = async (e) => {
       const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => { setFotoPreview(ev.target.result); setForm(f=>({...f,foto_url:ev.target.result})); };
-      reader.readAsDataURL(file);
+      const compressed = await comprimirImagen(file);
+      setFotoPreview(compressed); setForm(f=>({...f,foto_url:compressed}));
     };
 
     const guardar = async () => {
